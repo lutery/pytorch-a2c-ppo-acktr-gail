@@ -9,7 +9,14 @@ def _flatten_helper(T, N, _tensor):
 class RolloutStorage(object):
     def __init__(self, num_steps, num_processes, obs_shape, action_space,
                  recurrent_hidden_state_size):
-        self.obs = torch.zeros(num_steps + 1, num_processes, *obs_shape)
+        '''
+        num_steps: 每个环境交互的步数
+        num_processes: 环境的数量
+        obs_shape: 环境的observation的shape
+        action_space: 环境的action space
+        recurrent_hidden_state_size: 如果使用了recurrent policy，那么这个就是rnn的hidden state的维度，否则就是0
+        '''
+        self.obs = torch.zeros(num_steps + 1, num_processes, *obs_shape) # 存储和环境交互相关的观察
         self.recurrent_hidden_states = torch.zeros(
             num_steps + 1, num_processes, recurrent_hidden_state_size)
         self.rewards = torch.zeros(num_steps, num_processes, 1)
@@ -33,6 +40,9 @@ class RolloutStorage(object):
         self.step = 0
 
     def to(self, device):
+        '''
+        将存储的所有数据都移动到指定的设备上
+        '''
         self.obs = self.obs.to(device)
         self.recurrent_hidden_states = self.recurrent_hidden_states.to(device)
         self.rewards = self.rewards.to(device)
@@ -108,10 +118,15 @@ class RolloutStorage(object):
                                advantages,
                                num_mini_batch=None,
                                mini_batch_size=None):
+        '''
+        advantages: 优势函数的值，shape是(num_steps, num_processes)，这个是用来进行ppo训练的，如果ppo训练使用了gae，那么这个advantage就是gae计算出来的优势函数的值，如果ppo训练没有使用gae，那么这个advantage就是returns - value_preds计算出来的优势函数的值
+        num_mini_batch: 进行ppo训练的时候，将数据分成多少个mini-batch进行训练，如果没有指定mini_batch_size的话，那么就根据num_mini_batch来计算mini_batch_size，如果两者都没有指定的话，那么就默认使用num_mini_batch=32来计算mini_batch_size
+        mini_batch_size: 进行ppo训练的时候，每个mini-batch
+        '''
         num_steps, num_processes = self.rewards.size()[0:2]
         batch_size = num_processes * num_steps
 
-        if mini_batch_size is None:
+        if mini_batch_size is None: # 自动计算合适的mini_batch_size
             assert batch_size >= num_mini_batch, (
                 "PPO requires the number of processes ({}) "
                 "* number of steps ({}) = {} "
@@ -120,10 +135,11 @@ class RolloutStorage(object):
                           num_mini_batch))
             mini_batch_size = batch_size // num_mini_batch
         sampler = BatchSampler(
-            SubsetRandomSampler(range(batch_size)),
-            mini_batch_size,
-            drop_last=True)
+            SubsetRandomSampler(range(batch_size)), # 从 indices 中随机采样
+            mini_batch_size, # 每批 32 个样本
+            drop_last=True) # # 最后不足 32 的丢弃
         for indices in sampler:
+            # 根据索引随机采样样本
             obs_batch = self.obs[:-1].view(-1, *self.obs.size()[2:])[indices]
             recurrent_hidden_states_batch = self.recurrent_hidden_states[:-1].view(
                 -1, self.recurrent_hidden_states.size(-1))[indices]
@@ -134,6 +150,8 @@ class RolloutStorage(object):
             masks_batch = self.masks[:-1].view(-1, 1)[indices]
             old_action_log_probs_batch = self.action_log_probs.view(-1,
                                                                     1)[indices]
+            
+            # 如果advantages是None，那么adv_targ也是None，否则就根据索引随机采样优势函数的值
             if advantages is None:
                 adv_targ = None
             else:

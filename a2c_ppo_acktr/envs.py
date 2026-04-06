@@ -105,7 +105,8 @@ def make_vec_envs(env_name,
             envs = VecNormalize(envs, gamma=gamma)
 
     envs = VecPyTorch(envs, device)
-
+    
+    # 进行帧堆叠，如果没有指定则默认在输入为图像时进行4帧堆叠
     if num_frame_stack is not None:
         envs = VecPyTorchFrameStack(envs, num_frame_stack, device)
     elif len(envs.observation_space.shape) == 3:
@@ -165,6 +166,10 @@ class TransposeImage(TransposeObs):
 
 
 class VecPyTorch(VecEnvWrapper):
+    '''
+    这个的主要作用就是将observation和reward转换成torch的tensor，并且放到指定的device上
+     - observation转换成float类型的tensor
+    '''
     def __init__(self, venv, device):
         """Return only every `skip`-th frame"""
         super(VecPyTorch, self).__init__(venv)

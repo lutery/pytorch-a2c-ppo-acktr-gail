@@ -10,6 +10,13 @@ from stable_baselines3.common.running_mean_std import RunningMeanStd
 
 class Discriminator(nn.Module):
     def __init__(self, input_dim, hidden_dim, device):
+        '''
+        判别器，输入是state和action的拼接，输出是一个标量，表示当前的state-action对是来自专家还是来自策略
+
+        input_dim: state_dim + action_dim
+        hidden_dim: discriminator网络的隐藏层维度
+        device: discriminator网络的计算设备
+        '''
         super(Discriminator, self).__init__()
 
         self.device = device
@@ -32,15 +39,24 @@ class Discriminator(nn.Module):
                          policy_state,
                          policy_action,
                          lambda_=10):
-        alpha = torch.rand(expert_state.size(0), 1)
+        '''
+        expoert_state: 专家数据的状态，shape是(batch_size, state_dim)
+        expert_action: 专家数据的动作，shape是(batch_size, action_dim)
+        policy_state: 策略数据的状态，shape是(batch_size, state_dim)
+        policy_action: 策略数据的动作，shape是(batch_size, action_dim)
+        lambda_: 梯度惩罚的权重，默认值是10
+        '''
+        alpha = torch.rand(expert_state.size(0), 1) # 随机值，shape是(batch_size, 1)，todo 作用
         expert_data = torch.cat([expert_state, expert_action], dim=1)
         policy_data = torch.cat([policy_state, policy_action], dim=1)
 
         alpha = alpha.expand_as(expert_data).to(expert_data.device)
 
+        # todo 就这么随机的融合专家数据和策略数据来进行训练吗？后续看看它的代码
         mixup_data = alpha * expert_data + (1 - alpha) * policy_data
         mixup_data.requires_grad = True
 
+        # 进行判别预测
         disc = self.trunk(mixup_data)
         ones = torch.ones(disc.size()).to(disc.device)
         grad = autograd.grad(
@@ -55,8 +71,16 @@ class Discriminator(nn.Module):
         return grad_pen
 
     def update(self, expert_loader, rollouts, obsfilt=None):
+        '''
+        expert_loader: 专家数据的dataloader，提供专家数据的mini-batch
+        rollouts: 策略交互数据的存储对象，提供策略数据的mini-batch，这里的数据来自待训练的网络的交互数据，后续会使用这些数据来进行训练
+        obsfilt: 用来对专家数据的状态进行过滤的函数，主要是用来对专家数据的状态进行归一化处理的，
+        后续在训练的时候会使用这个函数来对专家数据的状态进行归一化处理，这样就能够让专家数据的状态和策略数据的状态在同一个尺度上进行训练了，
+        如果没有这个函数的话，那么专家数据的状态和策略数据的状态可能在不同的尺度上进行训练，这样就会导致训练的效果不好了
+        '''
         self.train()
 
+        # 采集样本，这是待训练网络的交互数据，后续会使用这些数据来进行训练
         policy_data_generator = rollouts.feed_forward_generator(
             None, mini_batch_size=expert_loader.batch_size)
 
@@ -64,17 +88,22 @@ class Discriminator(nn.Module):
         n = 0
         for expert_batch, policy_batch in zip(expert_loader,
                                               policy_data_generator):
+            # 专家数据和待训练的交互数据
             policy_state, policy_action = policy_batch[0], policy_batch[2]
+            # 根据交互数据的状态和动作，计算预测的判别结果
             policy_d = self.trunk(
                 torch.cat([policy_state, policy_action], dim=1))
 
+            # 状态数据的状态和动作
             expert_state, expert_action = expert_batch
-            expert_state = obsfilt(expert_state.numpy(), update=False)
+            expert_state = obsfilt(expert_state.numpy(), update=False) # todo 对观察进行归一化处理，具体是如何归一化的
             expert_state = torch.FloatTensor(expert_state).to(self.device)
             expert_action = expert_action.to(self.device)
+            # 判别器对专家数据进行判断
             expert_d = self.trunk(
                 torch.cat([expert_state, expert_action], dim=1))
 
+            # 计算判别器的损失，使用二分类交叉熵损失函数，专家数据的标签是1，待训练的交互数据的标签是0
             expert_loss = F.binary_cross_entropy_with_logits(
                 expert_d,
                 torch.ones(expert_d.size()).to(self.device))
