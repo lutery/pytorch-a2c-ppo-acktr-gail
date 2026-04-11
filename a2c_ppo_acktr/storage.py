@@ -34,6 +34,8 @@ class RolloutStorage(object):
 
         # Masks that indicate whether it's a true terminal state
         # or time limit end state
+        # bad_masks = 1：表示真实终止状态
+        # bad_masks = 0：表示时间限制终止状态
         self.bad_masks = torch.ones(num_steps + 1, num_processes, 1)
 
         self.num_steps = num_steps
@@ -79,24 +81,44 @@ class RolloutStorage(object):
                         gamma,
                         gae_lambda,
                         use_proper_time_limits=True):
+        '''
+        todo 
+
+        next_value: 最后一步的价值预测，用于计算最后一步的回报
+        use_gae: 是否使用gae来计算回报，如果使用了gae，那么就会使用gae来计算回报，否则就使用普通的蒙特卡洛的方式来计算回报
+        gamma: 折扣因子，用于计算回报的折扣
+        gae_lambda: gae的lambda参数，用于计算gae的权重
+        use_proper_time_limits: 是否使用proper time limits来计算回报，如果使用了proper time limits，那么就会根据bad_masks来正确地处理那些因为时间限制而结束的episode的回报计算，如果没有使用proper time limits，那么就会把所有因为时间限制而结束的episode都当做正常结束来计算回报
+        '''
+        # todo 这两个计算回报的方式有什么区别
         if use_proper_time_limits:
-            if use_gae:
+            if use_gae: # 如果使用了gae，那么就会使用gae来计算回报，否则就使用普通的蒙特卡洛的方式来计算回报
+                # 看来每次采集数据都一定要采集num_steps步
+                # 这里将最后一步的预测的价值存储到value_preds的最后一个位置上，来进行gae的计算
                 self.value_preds[-1] = next_value
                 gae = 0
-                for step in reversed(range(self.rewards.size(0))):
+                for step in reversed(range(self.rewards.size(0))): # 逆序遍历每一步
                     delta = self.rewards[step] + gamma * self.value_preds[
                         step + 1] * self.masks[step +
-                                               1] - self.value_preds[step]
-                    gae = delta + gamma * gae_lambda * self.masks[step +
-                                                                  1] * gae
-                    gae = gae * self.bad_masks[step + 1]
-                    self.returns[step] = gae + self.value_preds[step]
+                                               1] - self.value_preds[step] # ppo中计算gae的核心公式，delta是当前的reward加上下一步的价值预测乘以折扣因子减去当前的价值预测
+                    gae = delta + gamma * gae_lambda * self.masks[step + 1] * gae # gae的计算，gae是当前的delta加上下一步的gae乘以折扣因子乘以gae_lambda乘以mask，mask是用来标记当前的状态是否是一个新的episode的开始的，如果是一个新的episode的开始，那么这个mask就是0，否则就是1，这样在计算gae的时候，如果遇到了一个新的episode的开始，那么这个mask就是0，那么在计算gae的时候，gae就会被重置为0，这样就能够正确地处理每个环境的hidden state了，如果不是一个新的episode的开始，那么这个mask就是1，那么在计算gae的时候，gae就会保持上一次的状态继续传播下去，这样就能够正确地处理每个环境的hidden state了
+                    gae = gae * self.bad_masks[step + 1] # 如果是超时终止，由于不知道未来的情况，所以最好直接用预测价值即可
+                    self.returns[step] = gae + self.value_preds[step] # gae加上当前的价值预测就是当前的回报，这个是ppo中计算gae的核心公式
             else:
+                # 这里将最后一步的预测的价值存储到value_preds的最后一个位置上
                 self.returns[-1] = next_value
                 for step in reversed(range(self.rewards.size(0))):
+                    # 这里的回报计算方式是类似累积一个回合的总奖励的方式，当前的回报等于下一步的回报乘以折扣因子加上当前的奖励，这个是蒙特卡洛的方式来计算回报的核心公式
+                    # 正常部分（当 bad_masks=1，真实终止）：returns[step] = returns[step+1] * gamma * masks[step+1] + rewards[step]
+                    # 时间限制终止部分（当 bad_masks=0）：returns[step] = value_preds[step]
+                    '''
+                    当遇到时间限制终止时，不使用蒙特卡洛回报
+                    而是使用价值函数的预测值 value_preds[step]
+                    因为时间限制终止后，实际环境仍在继续，我们不知道后续的真实回报，所以用价值函数的估计来代替
+                    '''
                     self.returns[step] = (self.returns[step + 1] * \
                         gamma * self.masks[step + 1] + self.rewards[step]) * self.bad_masks[step + 1] \
-                        + (1 - self.bad_masks[step + 1]) * self.value_preds[step]
+                        + (1 - self.bad_masks[step + 1]) * self.value_preds[step] 
         else:
             if use_gae:
                 self.value_preds[-1] = next_value
@@ -161,14 +183,21 @@ class RolloutStorage(object):
                 value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, adv_targ
 
     def recurrent_generator(self, advantages, num_mini_batch):
-        num_processes = self.rewards.size(1)
+        '''
+        advantages: 优势函数的值，shape是(num_steps, num_processes)，这个是用来进行ppo训练的，如果ppo训练使用了gae，那么这个advantage就是gae计算出来的优势函数的值，如果ppo训练没有使用gae，那么这个advantage就是returns - value_preds计算出来的优势函数的值
+        num_mini_batch: 进行ppo训练的时候，将数据分成多少个mini-batch进行训练，如果没有指定mini_batch_size的话，那么就根据num_mini_batch来计算mini_batch_size，如果两者都没有指定的话，那么就默认使用num_mini_batch=32来计算mini_batch_size
+        '''
+
+        num_processes = self.rewards.size(1) # num_processes是环境的数量
         assert num_processes >= num_mini_batch, (
             "PPO requires the number of processes ({}) "
             "to be greater than or equal to the number of "
             "PPO mini batches ({}).".format(num_processes, num_mini_batch))
-        num_envs_per_batch = num_processes // num_mini_batch
-        perm = torch.randperm(num_processes)
+        num_envs_per_batch = num_processes // num_mini_batch # 每个mini-batch中包含的环境数量
+        perm = torch.randperm(num_processes) # 随机打乱环境的索引，来进行随机采样
         for start_ind in range(0, num_processes, num_envs_per_batch):
+            # 根据随机打乱的环境索引来采样数据，来构建mini-batch
+            # 这里一个索引的数据包含一个环境的所有交互数据
             obs_batch = []
             recurrent_hidden_states_batch = []
             actions_batch = []
@@ -178,6 +207,7 @@ class RolloutStorage(object):
             old_action_log_probs_batch = []
             adv_targ = []
 
+            # 根据随机打乱的环境索引来采样数据，来构建mini-batch
             for offset in range(num_envs_per_batch):
                 ind = perm[start_ind + offset]
                 obs_batch.append(self.obs[:-1, ind])
@@ -193,21 +223,21 @@ class RolloutStorage(object):
 
             T, N = self.num_steps, num_envs_per_batch
             # These are all tensors of size (T, N, -1)
-            obs_batch = torch.stack(obs_batch, 1)
-            actions_batch = torch.stack(actions_batch, 1)
-            value_preds_batch = torch.stack(value_preds_batch, 1)
-            return_batch = torch.stack(return_batch, 1)
-            masks_batch = torch.stack(masks_batch, 1)
+            obs_batch = torch.stack(obs_batch, 1) # shape 是(num_steps, num_envs_per_batch, obs_shape)
+            actions_batch = torch.stack(actions_batch, 1) # shape 是(num_steps, num_envs_per_batch, action_shape)
+            value_preds_batch = torch.stack(value_preds_batch, 1) # shape 是(num_steps, num_envs_per_batch, 1)
+            return_batch = torch.stack(return_batch, 1) # shape 是(num_steps, num_envs_per_batch, 1)
+            masks_batch = torch.stack(masks_batch, 1)   # shape 是(num_steps, num_envs_per_batch, 1)
             old_action_log_probs_batch = torch.stack(
-                old_action_log_probs_batch, 1)
-            adv_targ = torch.stack(adv_targ, 1)
+                old_action_log_probs_batch, 1) # shape 是(num_steps, num_envs_per_batch, 1)
+            adv_targ = torch.stack(adv_targ, 1) # shape 是(num_steps, num_envs_per_batch, 1)
 
             # States is just a (N, -1) tensor
             recurrent_hidden_states_batch = torch.stack(
                 recurrent_hidden_states_batch, 1).view(N, -1)
 
             # Flatten the (T, N, ...) tensors to (T * N, ...)
-            obs_batch = _flatten_helper(T, N, obs_batch)
+            obs_batch = _flatten_helper(T, N, obs_batch) # shape 是(num_steps * num_envs_per_batch, obs_shape)
             actions_batch = _flatten_helper(T, N, actions_batch)
             value_preds_batch = _flatten_helper(T, N, value_preds_batch)
             return_batch = _flatten_helper(T, N, return_batch)

@@ -52,6 +52,8 @@ def main():
 
     # todo 这里构建的网络的作用是啥？
     # todo 后续将这里的代码全部注释补齐
+    # 以下是实际的训练算法的构建，也就是说Policy网络
+    # 通过下述的各种算法进行训练
     if args.algo == 'a2c':
         agent = algo.A2C_ACKTR(
             actor_critic,
@@ -172,15 +174,18 @@ def main():
             gail_epoch = args.gail_epoch
             if j < 10:
                 gail_epoch = 100  # Warm up
-            for _ in range(gail_epoch):
+            for _ in range(gail_epoch): # 训练判别器gail_epoch次，前10次是预热训练，完成后就不用预热了，按照正常的轮次训练判别器
                 discr.update(gail_train_loader, rollouts,
                              utils.get_vec_normalize(envs)._obfilt)
 
             for step in range(args.num_steps):
+                # 利用判别器的判别的值去作为奖励回报
+                # todo 后续是怎么使用的
                 rollouts.rewards[step] = discr.predict_reward(
                     rollouts.obs[step], rollouts.actions[step], args.gamma,
                     rollouts.masks[step])
-
+        
+        # 根据采集的数据计算回报，这个函数的实现比较复杂，后续看看它的代码，来看看它是如何计算回报的
         rollouts.compute_returns(next_value, args.use_gae, args.gamma,
                                  args.gae_lambda, args.use_proper_time_limits)
 

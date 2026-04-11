@@ -79,12 +79,20 @@ class Policy(nn.Module):
         return value
 
     def evaluate_actions(self, inputs, rnn_hxs, masks, action):
+        '''
+        inputs: 当前的obs
+        rnn_hxs: 如果使用了recurrent policy，那么这个就是rnn的hidden state，否则就是0
+        masks: 用来标记当前的obs是否是一个新的episode的开始，如果是一个新的episode的开始，那么这个mask就是0，否则就是1
+        action: 当前的动作，shape是(batch_size, action_dim)
+        '''
+        # 输入obs、每一个obs对应的hidden state、mask，来计算动作分布的log_prob和熵
         value, actor_features, rnn_hxs = self.base(inputs, rnn_hxs, masks)
         dist = self.dist(actor_features)
 
         action_log_probs = dist.log_probs(action)
         dist_entropy = dist.entropy().mean()
 
+        # 返回价值预测、动作的log_prob、动作分布的熵、更新后的hidden state
         return value, action_log_probs, dist_entropy, rnn_hxs
 
 
