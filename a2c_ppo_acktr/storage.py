@@ -70,6 +70,9 @@ class RolloutStorage(object):
         self.step = (self.step + 1) % self.num_steps
 
     def after_update(self):
+        '''
+        将存储的最后一步的数据复制到第一步的位置上，来为下一次的交互做准备
+        '''
         self.obs[0].copy_(self.obs[-1])
         self.recurrent_hidden_states[0].copy_(self.recurrent_hidden_states[-1])
         self.masks[0].copy_(self.masks[-1])

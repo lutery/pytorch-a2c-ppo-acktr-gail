@@ -180,7 +180,10 @@ def main():
 
             for step in range(args.num_steps):
                 # 利用判别器的判别的值去作为奖励回报
-                # todo 后续是怎么使用的
+                # 专家数据是一个能够正确解决游戏环境的状态和动作的集合
+                # 这里将专家数据作为reward
+                # 这样就趋势策略模型的状态和动作分布向专家数据的状态和动作分布靠近了
+                # 而当策略模型生成的数据连专家模型都无法区分了，那么就说明策略模型已经学会了专家模型的行为了
                 rollouts.rewards[step] = discr.predict_reward(
                     rollouts.obs[step], rollouts.actions[step], args.gamma,
                     rollouts.masks[step])
