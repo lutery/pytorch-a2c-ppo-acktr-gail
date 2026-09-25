@@ -81,6 +81,7 @@ class DiagGaussian(nn.Module):
                                constant_(x, 0))
 
         self.fc_mean = init_(nn.Linear(num_inputs, num_outputs))
+        # torch.zeros(num_outputs) 创建的张量是一个常量，不会被训练，这里只是传入的一个初始值初始化 AddBias
         self.logstd = AddBias(torch.zeros(num_outputs))
 
     def forward(self, x):
