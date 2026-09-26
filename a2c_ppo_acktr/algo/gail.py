@@ -188,21 +188,29 @@ class Discriminator(nn.Module):
 class ExpertDataset(torch.utils.data.Dataset):
     def __init__(self, file_name, num_trajectories=4, subsample_frequency=20):
         all_trajectories = torch.load(file_name)
+        '''
+        all_trajectories = {
+            'states':  (B, L, state_dim),    # B 条轨迹，每条最长 L 步，观测维度 state_dim
+            'actions': (B, L, action_dim),   # 对应每一步的动作
+            'lengths': (B,),                 # 每条轨迹的真实有效长度（episode 结束时间不同）
+        }
+        '''
         
-        perm = torch.randperm(all_trajectories['states'].size(0))
-        idx = perm[:num_trajectories]
+        perm = torch.randperm(all_trajectories['states'].size(0)) #  # 把所有轨迹随机排列
+        idx = perm[:num_trajectories] # # 取前 4 个
 
         self.trajectories = {}
         
         # See https://github.com/pytorch/pytorch/issues/14886
         # .long() for fixing bug in torch v0.4.1
+        # 在 0, subsample_frequency 范围内随机取样生成张量，张量的shape是(num_trajectories, )
         start_idx = torch.randint(
             0, subsample_frequency, size=(num_trajectories, )).long()
 
         for k, v in all_trajectories.items():
             data = v[idx]
 
-            if k != 'lengths':
+            if k != 'lengths':  # 对 states 和 actions：
                 samples = []
                 for i in range(num_trajectories):
                     samples.append(data[i, start_idx[i]::subsample_frequency])
