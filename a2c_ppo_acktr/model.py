@@ -136,10 +136,11 @@ class NNBase(nn.Module):
     def _forward_gru(self, x, hxs, masks):
         '''
         x: 当前的obs特征，经过了obs或者mlp提取后的特征表示
-        hxs: 上一个时间步的hidden state，如果是实时交互，这里的hxs是实时更新的，如果是一次性训练，那么这里的hsx是从空状态开始
+        hxs: 上一个时间步的hidden state，如果是实时交互，这里的hxs是实时更新的，如果是一次性训练，那么这里的hsx是从空状态开始 (N, hidden_size)
         masks: 用来标记当前的obs是否是一个新的episode的开始，如果是一个新的episode的开始，那么这个mask就是0，否则就是1
         '''
-        if x.size(0) == hxs.size(0): # 这里应该是针对只有一个环境的情况，如果只有一个环境，那么就直接进行一次GRU的前向传播就可以了
+        # (N, hidden_size)，如果只有单步，那么 x.size(0) = 第一个维度是环境的个数 * 步数， 如果只有单步那么 x.size(0)的第一个维度就只有环境的个数，那么就正好等于 hxs.size(0)
+        if x.size(0) == hxs.size(0): # 这里应该是针对只有一个环境且只有一步的情况，如果只有一个环境，那么就直接进行一次GRU的前向传播就可以了
             # 如果obs是新的episode的开始，那么就将hidden state重置为0，这里是通过masks来实现
             x, hxs = self.gru(x.unsqueeze(0), (hxs * masks).unsqueeze(0))
             x = x.squeeze(0)
@@ -166,9 +167,10 @@ class NNBase(nn.Module):
                             .cpu())
 
             # +1 to correct the masks[1:]
+            # .squeeze() 去掉 nonzero 带来的那个多余的尾维；正因为可能塌成 0 维，下面才有 dim() == 0 的特判
             if has_zeros.dim() == 0: # 如果 has_zeros 是一个标量，说明只有一个断点，那么直接把它转换成列表，并且加1来修正索引
                 # Deal with scalar
-                has_zeros = [has_zeros.item() + 1]
+                has_zeros = [has_zeros.item() + 1] # 这里的加1是修正到真正的截断位置，如果不这么做，到时候截断的位置是尾巴处
             else:
                 # todo has_zeros + 1 是什么意思？后续看看它的代码
                 # 说是has_zeros获取的索引是以0为起点的，但是我们需要的是以1为起点的索引，所以需要加1来进行修正，有啥用
