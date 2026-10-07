@@ -185,6 +185,8 @@ class Discriminator(nn.Module):
             return reward / np.sqrt(self.ret_rms.var[0] + 1e-8)
 
 
+# 为什么只需要一一部分的专家数据，看md文档
+# todo 后面是如何使用专家数据的
 class ExpertDataset(torch.utils.data.Dataset):
     def __init__(self, file_name, num_trajectories=4, subsample_frequency=20):
         all_trajectories = torch.load(file_name)
@@ -196,47 +198,75 @@ class ExpertDataset(torch.utils.data.Dataset):
         }
         '''
         
-        perm = torch.randperm(all_trajectories['states'].size(0)) #  # 把所有轨迹随机排列
-        idx = perm[:num_trajectories] # # 取前 4 个
+        perm = torch.randperm(all_trajectories['states'].size(0)) #  构建一个和样本数量一致的随机列表
+        idx = perm[:num_trajectories] # # 取前 num_trajectories 个
 
         self.trajectories = {}
         
         # See https://github.com/pytorch/pytorch/issues/14886
         # .long() for fixing bug in torch v0.4.1
-        # 在 0, subsample_frequency 范围内随机取样生成张量，张量的shape是(num_trajectories, )
+        # 在 0, subsample_frequency 范围内随机取样生成张量，张量的shape是(num_trajectories, )\
+        # start_idx[i] 是个 0 维张量（tensor(3) 这样），它直接放在切片起点上。PyTorch 支持用整型张量当索引用——这也是前面 .long() 注释的来由：必须是 int64 类型的张量才能安全地充当索引。
         start_idx = torch.randint(
             0, subsample_frequency, size=(num_trajectories, )).long()
 
+        # 这里将专家数据随机采样存储到 self.trajectories 
         for k, v in all_trajectories.items():
-            data = v[idx]
+            data = v[idx] # shape is [4, L, dim]
 
             if k != 'lengths':  # 对 states 和 actions：
-                samples = []
+                samples = [] # 从第i个随机位置的开始i，从start_idx[i] 这个随机位置开始，每隔 20 步取一个时间步，把一条稠密的长轨迹抽成一条稀疏的短轨迹
                 for i in range(num_trajectories):
+                    '''
                     samples.append(data[i, start_idx[i]::subsample_frequency])
+#                   │  └────────┬─────────┘  └──────┬──────┘
+#                   │   从start开始、步长20的切片      每20步抽1个
+#                   └ 第 i 条轨迹
+                    '''
+                    samples.append(data[i, start_idx[i]::subsample_frequency])
+                    # (~L/20, dim)     ← 隔 20 步抽一行
+                #  (4, ~L/20, dim)  ← 回到"轨迹"维度
                 self.trajectories[k] = torch.stack(samples)
             else:
+                # 如果是长度就直接讲长度设置为总长度的 1 / subsample_frequency
                 self.trajectories[k] = data // subsample_frequency
 
         self.i2traj_idx = {}
         self.i2i = {}
-        
+
+        # 采样的总长度，也就是有多少个样本数据
         self.length = self.trajectories['lengths'].sum().item()
 
-        traj_idx = 0
-        i = 0
+        traj_idx = 0 # # "我"现在站在第几条轨迹上（只增不减）
+        i = 0 # "我"在当前这条轨迹里已经走到第几个位置（跨轨迹时会结转）
 
         self.get_idx = []
-        
-        for j in range(self.length):
-            
+
+        # 讲不等长的 num_trajectories 样本 展平后的
+        # 索引位置放置在self.get_idx
+        # 这样方便在get_item中索引
+        for j in range(self.length): # 开始模拟遍历每一个样本
+
+            # 获取traj_idx个样本长度，由于一开始i等于0，所以回直接退出循环
+            # 然后第二次遍历，此时i + 1 ，依旧不会大于 第 traj_idx 个样本的长度
+            # ...
+            # 一直遍历，直到 i 终于等于第一个样本轨迹的长度，进入while，进入后 i 要减去第一个样本轨迹的长度，i=0，表示从第二个样本的第1个元素开始遍历，traj_idx + 1 表示第二个样本轨迹的索引
             while self.trajectories['lengths'][traj_idx].item() <= i:
                 i -= self.trajectories['lengths'][traj_idx].item()
                 traj_idx += 1
 
+            # 第一个样本就直接存储到get_idx中，表示当获取第 第一个 item项时从 第traj_idx索引样本中 获取 第 i 个样本
+            # 所以第二个样本的索引就是第traj_idx索引样本中 获取 第 i + 1 个样本
+            # ...
+            # 讲第二个样本轨迹的索引以及其索引位置放到get_idx
+            # 如此循环就可以讲每一个样本按照 单索引 的位置放到 get_idx中
+            # 这样方便在 get_item中获取使用
             self.get_idx.append((traj_idx, i))
 
+            # 每完成一个遍历后，i就+1
             i += 1
+
+        # 说到底，就是想到一种办法，方便讲get_item中的单索引i去按顺序遍历获取我们随机采样的样本中的每一个数据
             
             
     def __len__(self):
